@@ -1,0 +1,14 @@
+## What this repo is
+
+Skill definitions. Skills are grouped into category folders. Each category has its own `AGENTS.md` with the conventions specific to it:
+
+- `development-pipeline/` — feature-development workflow (spec → plan → test → cross-check → implement → review → address-review). See `development-pipeline/AGENTS.md`.
+- `dagu/` — the Pi workflow, the unattended copies of the `development-pipeline` skills it runs, and the launcher skill that starts and follows runs. Skills live in `dagu/skills/`. See `dagu/AGENTS.md`.
+- `utility/` — standalone skills that each do one self-contained job. See `utility/AGENTS.md`.
+
+## Authoring rules for every SKILL.md
+
+- Frontmatter is required: `name` (must match the folder name), `disable-model-invocation: true`.
+- Write for agent consumption: short declarative sentences, explicit identifiers, no rhetorical flourish. Applies to the skill body, inline templates, and the outputs the skills produce.
+- Harness-agnostic: never name proprietary tools tied to a specific agent harness.
+- Each skill must work from an empty context: a SKILL.md is self-contained and never assumes another skill ran first or relies on prior chat state.

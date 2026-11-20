@@ -1,0 +1,169 @@
+---
+name: dagu-review
+description: Review code changes against a specification without human interaction.
+disable-model-invocation: true
+---
+
+Flow: `dagu-spec → dagu-plan → dagu-cross-check (spec-plan) → dagu-test → dagu-cross-check (all) → dagu-implement → dagu-review → dagu-address-review`. A workflow orchestrator runs each stage unattended in a fresh session. It repeats each `dagu-cross-check` stage until a pass finds no finding or 5 passes run, and repeats `dagu-review → dagu-address-review` until a review finds no issue.
+
+## Inputs
+
+- A spec folder path containing a file ending with `SPEC.md`. Expected location: `specs/<kebab-title>/`.
+- Picked up automatically from that folder when present, skipped without penalty when absent:
+    - `PLAN.md` — the stage reports grade Acceptance criteria against the **plan's** criteria, not the spec's; the plan is what maps their statuses back to the spec.
+    - `IMPLEMENT.md` — files changed plus each plan Acceptance criterion's verified/unverified/failed status.
+    - `TEST.md` — test files changed plus a Coverage table mapping spec and plan requirements to tests. A `Results` table records test runs made after implementation; they are newer than
+      the `IMPLEMENT.md` statuses.
+    - `CROSS-CHECK.md` — open inconsistencies between the spec, plan, and tests. The spec stays the authority for any change that touches an open finding.
+- The code changes to review, provided as one of:
+    - A list of file paths or a directory.
+    - A git diff range (e.g. `main..HEAD`, a branch name, or a commit SHA).
+    - Nothing → default to the uncommitted working tree (`git status` + `git diff HEAD`). Treat each untracked file from `git status` as fully added.
+- Exclude the `specs/` folder from the change set. Pipeline documents are not code under review.
+- Optional `## Push-back Context` section with human input (see Unattended operation).
+
+## Workflow
+
+1. Locate and ingest the docs. List the folder contents, identify the file ending with `SPEC.md`, and read it in full; treat every section as a binding constraint. Read `PLAN.md` and every stage
+   report present in full. Treat every `## Decisions` entry as binding. Read the project instructions. For each absent doc, skip every check below that depends on it; its absence is not an issue.
+2. Enumerate the changed files. Resolve the input to a concrete list of file paths plus their changed line ranges. Read each changed file in full from disk so review line numbers stay accurate.
+   Also read the spec's Context-referenced files to judge pattern compliance, Note constraints, and existing conventions. Merge the files that all stage reports list as created, edited, or
+   deleted into one list. Compare that merged list against the resolved list and carry every mismatch into step 4.
+3. Map each change to the spec. For every changed hunk, determine which spec item it satisfies or violates: Scope bullet (feature spec), Expected-behavior bullet (bug-fix spec), Acceptance
+   criterion, Context pointer, Example, Note, or `## Decisions` entry. Treat necessary setup/infrastructure repairs unrelated to feature logic or test assertions as supporting test verification when recorded in `IMPLEMENT.md`. Track unmapped changes (defined in step 5).
+4. Identify issues. A behavior that a `## Decisions` entry records as intended or as not an issue is not an issue. Treat each of these as a potential issue:
+    - Scope item (feature spec) or Expected-behavior bullet (bug-fix spec) not implemented or only partially implemented
+    - File or symbol modified that is outside the spec's stated scope — listed under Out of scope, or unrelated to the Expected behavior or Suspected cause (bug-fix spec) and not a necessary test setup repair recorded in `IMPLEMENT.md`
+    - Acceptance criterion not satisfied by the diff (no corresponding code, or the code contradicts it)
+    - Example in the spec not honored (input → output mismatch, before → after mismatch)
+    - Existing pattern named in Context not followed (a new ad-hoc pattern introduced instead)
+    - Bespoke one-off utility, helper, or inline reimplementation added where an existing canonical utility in the codebase already provides the behavior
+    - Code placed in the wrong package, module, or service — architectural drift from the codebase's established layering (e.g. business logic in a controller, persistence calls from a domain type)
+    - Note/constraint violated (auth, ordering, idempotency, perf, side effects, role check, null/empty handling)
+    - Edge case from the spec not handled
+    - For bug-fix specs: the reproduction input still produces the wrong behavior, or the expected behavior is not produced
+    - Suspected correctness bug introduced by the diff itself (null deref, off-by-one, swallowed exception, missing transaction boundary, leaked resource, SQL/XSS/command injection, broken
+      authorization check)
+    - Maintainability defect introduced by the diff:
+        - Unclear naming or hard-to-follow code
+        - Oversized or overly complex function or class
+        - Duplication within the change set
+        - Dead, debug, or commented-out code
+        - Comment or documentation that is wrong, stale, or missing where the code is non-obvious
+        - Unclear error message or missing error recovery or cleanup
+        - Tight coupling, wrong abstraction level, or code that is hard to test
+    - Mismatch between the stage reports and the change set: a file any report lists as created, edited, or deleted has no corresponding change in the diff, or a changed file is absent from
+      every report (only when at least one stage report is present)
+    - A stage report's claim about an Acceptance criterion that the diff does not bear out. Map each plan-graded status back to the spec criterion it serves, then check every spec criterion directly
+      against the code and tests regardless of the report: a `verified` mark exempts nothing, an `unverified` or `failed` mark must still be checked, and a Coverage row may cite a test that is missing
+      from the diff or does not actually exercise the criterion
+    - A plan Acceptance criterion that contradicts a spec Acceptance criterion or has no basis in the spec (only when a plan is present); a `verified` plan criterion can hide a spec criterion the
+      diff never satisfies — report the spec criterion under `## Acceptance criteria not met`
+    - Test changes that reinforce the implementation instead of verifying the specified behavior — tautological or change-detector tests. Concrete forms:
+        - Assertions hard-coded to the exact output the code currently produces, with no independent derivation from the spec's Examples or Acceptance criteria
+        - Over-mocking so the test only confirms stubbed interactions or that a method was called, never a real result
+        - Assertions on private state, internal call order, or implementation details rather than observable outputs and contracts
+        - A bug present in the diff encoded as the expected result, locking in the wrong behavior
+        - Snapshot/golden files regenerated and committed without inspection
+        - Only the happy path exercised, leaving the spec's edge cases, error paths, and Acceptance criteria unasserted
+5. Classify every unmapped change — a changed hunk not covered by the spec and not derivable from any Scope, Expected-behavior, Context, Note, or `## Decisions` entry — as described in Unattended
+   operation. Classify it as intended-but-undocumented or out-of-scope. Drop an intended hunk. Record an out-of-scope hunk as an issue under `## Out-of-scope changes`.
+6. Write the review, only if at least one issue was found, to a markdown file inside the same folder as the spec. Filename: replace the trailing `SPEC.md` with `REVIEW.md`. Overwrite if it
+   exists. If no issues were found, write no file and delete an existing review file, because it is stale.
+7. End with the result (see Result).
+
+## Unattended operation
+
+An orchestrator runs this skill in a fresh session. No human reads the session.
+
+- Never ask a question or wait for a reply.
+- Never end with a prose summary. The final message is only the `## Result` JSON object.
+- Use your own recommendation to classify an unmapped change when codebase evidence supports it. When a review file is written, record each classification under `## Decisions`: the question,
+  the answer, and the evidence.
+- Do not guess when no evidence supports a classification. Collect every such question. Then end `blocked`, write no file, and delete no file.
+- The prompt can contain a `## Push-back Context` section. Its `Reviewer feedback` holds human answers to the questions in the previous stdout log it names, from an earlier review
+  cycle. The `answers` in that log hold the human classifications that earlier runs of this stage applied, and the answers to `dagu-address-review` questions that they carried. Apply
+  every answer from both that classifies an unmapped change. Ignore an answer that decides a review finding; `dagu-address-review` applies it. The feedback overrides an earlier answer to
+  the same question. Human input overrides your own answers. When a review file is written, record each applied answer under `## Decisions` with `human answer` as the evidence.
+- When you end `blocked`, `dagu-address-review` does not run in this cycle. Carry every answer from the feedback and from the `answers` in the previous stdout log that decides a review
+  finding in `answers` (see Result), so `dagu-address-review` applies it in a later cycle.
+- On a stop condition, end `blocked` and state the stop reason in `questions`.
+
+## Content rules
+
+- Optimized for LLM consumption: short declarative sentences, explicit identifiers, no rhetorical flourish.
+- The review contains **only the issues found and where they occur**, plus `## Decisions`. Do not include summaries of the spec or diff, praise, restatements of criteria that pass, suggestions
+  unrelated to a concrete issue, references to a previous review, or meta-commentary.
+- An issue that points to specific code must cite the exact file path and line number(s) in its evidence table. Line numbers refer to the file at its current revision on disk.
+- One numbered heading per logical issue with one table; the same problem at multiple sites is one issue with one row per site. Different problems are separate issues, even when they share a file.
+- Below each heading write 1–2 short sentences naming what is wrong and which spec item or rule it violates (Scope bullet, Expected-behavior bullet, Acceptance criterion, Out-of-scope rule, Context pattern, Example, Note, `Correctness` for a bug not tied to a spec item, `Quality` for a maintainability defect, `Stage report` for a report/diff mismatch, or `Tests` for a test issue from step 4).
+- Use tables for evidence; quote the offending code only when it is shorter than the explanation and clarifies the issue.
+- No TODOs or `<TBD>` placeholders. If a finding is uncertain, omit it.
+
+## Investigation discipline
+
+- Do not run tests, install dependencies, or trigger any code execution.
+- Do not modify the code under review, the spec, the plan, or the stage reports. The only file this skill writes or deletes is its own `REVIEW.md` report.
+- Use version control only for read-only inspection.
+
+## File structure
+
+Up to four top-level sections, in this fixed order, and no others; omit any section that has no entries. Within an issue section, number issues sequentially starting at 1.
+
+```md
+# Review: <short title taken from the spec>
+
+## Out-of-scope changes
+
+### 1. <issue title>
+
+<1–2 sentences: what changed and why it is out of scope per the spec.>
+
+| File                | Lines        | Code                       |
+|---------------------|--------------|----------------------------|
+| `path/to/file.ext`  | 12–34        | `<offending snippet>`      |
+| same                | 320, 328–331 | `<offending snippet>`      |
+| `path/to/other.ext` | 88           | `<offending snippet>`      |
+
+## Acceptance criteria not met
+
+### 1. <criterion text quoted from the spec>
+
+<1–2 sentences: what is missing or wrong.>
+
+## Implementation issues
+
+### 1. <issue title>
+
+<1–2 sentences: what is wrong, naming the Context pattern, Note, edge case, `Correctness`, `Quality`, or `Tests` rule it violates.>
+
+## Decisions
+
+- <question> — <answer> — Evidence: <`path:line`, document location, or `human answer`>
+```
+
+Every issue that cites specific code carries the same `File`/`Lines`/`Code` evidence table; an Acceptance criterion the diff never addresses may stand on its 1–2 sentences with no table.
+`## Implementation issues` covers every finding that is neither out-of-scope nor a missed acceptance criterion.
+Issue headings carry no status tag. `dagu-address-review` appends ` [fixed]` or ` [invalidated]` to the end of a heading.
+
+## Result
+
+The orchestrator parses the final message of the session as JSON. Make the final message exactly one JSON object and nothing else. Its first character is `{` and its last character is `}`. Write no summary, heading, explanation, or code fence before or after it. Write the object once. Report the work only through the documents and this object.
+
+```json
+{"status": "done", "folder": "specs/<kebab-title>", "findings": 0, "questions": "", "answers": ""}
+```
+
+- `status`: `done` when the review completed; `blocked` when the run stopped on unanswered questions or a stop condition.
+- `folder`: the spec folder path relative to the current working directory.
+- `findings`: the number of issues written to the review file; `0` when no file was written. The orchestrator repeats review and address-review until a review reports `0`.
+- `questions`: one blocked question per line. Make each question self-contained: name the file, the line range, and the two classifications. Use an empty string when `done`.
+- `answers`: every human classification applied in this run, including those from the previous stdout log, and, when `blocked`, every carried answer that decides a review finding.
+  Write one `<question> — <answer>` per line. Use an empty string when none applies. A later run reads them from the previous stdout log.
+
+## Stop conditions
+
+- No folder provided.
+- Folder contains no file ending with `SPEC.md`, or contains multiple.
+- Spec is unreadable or empty.
+- No code changes resolvable from the input (empty diff, no files).

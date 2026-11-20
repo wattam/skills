@@ -1,0 +1,447 @@
+description: >
+    Run dagu-spec → dagu-plan → dagu-cross-check (spec-plan loop) → dagu-test → dagu-cross-check (all loop) → dagu-implement → dagu-review/dagu-address-review (loop) with Pi.
+    The dagu- skills answer their own questions when evidence supports an answer. Other questions pause the run at a human task.
+queue: development-pipeline
+working_dir: ${PROJECT_DIR}
+
+params:
+    -   name: REQUEST
+        type: string
+        required: true
+        description: Feature or bug description, as text or a file path.
+    -   name: PROJECT_DIR
+        type: string
+        required: true
+        description: Absolute path of the project repository.
+
+env:
+    # Stages run without idle gaps, so the cheaper 5-minute cache write is enough.
+    -   PI_CACHE_RETENTION: short
+
+harness:
+    provider: pi
+
+# init writes "<workflow> <run ID>" to the lock in the worktree's git dir on every run and retry.
+# The exit handler removes only its own lock.
+handler_on:
+    init:
+        run: |
+            lock="$(git rev-parse --absolute-git-dir)/dagu-development-pipeline.lock"
+            self="$(printenv DAG_NAME) $(printenv DAG_RUN_ID)"
+            waited=0
+            until (set -o noclobber; echo "$self" > "$lock") 2> /dev/null; do
+                holder="$(cat "$lock" 2> /dev/null)"
+                if [ "$holder" = "$self" ]; then
+                    break
+                fi
+                read -r holder_dag holder_run <<EOF
+            $holder
+            EOF
+                if [ -n "$holder_run" ] && dagu status --run-id "$holder_run" "$holder_dag" 2> /dev/null | head -n 1 | grep -Eq '^(Queued|Running|Waiting) '; then
+                    echo "Run $holder_run of $holder_dag is active in $(git rev-parse --show-toplevel). Use another worktree." >&2
+                    exit 1
+                fi
+                if [ "$waited" -ge 30 ]; then
+                    echo "Cannot replace $lock for 30 seconds. Remove it and $lock.replace when no run is starting in this worktree." >&2
+                    exit 1
+                fi
+                waited=$((waited + 1))
+                # A starting run creates its lock empty and writes it at once, so an empty lock is stale only after 5 passes.
+                # The mkdir mutex lets one run remove the stale lock. The next pass creates the new lock with noclobber.
+                if { [ -n "$holder" ] || [ "$waited" -gt 5 ]; } && mkdir "$lock.replace" 2> /dev/null; then
+                    if [ "$(cat "$lock" 2> /dev/null)" = "$holder" ]; then
+                        rm -f "$lock"
+                    fi
+                    rmdir "$lock.replace"
+                else
+                    sleep 1
+                fi
+            done
+    exit:
+        run: |
+            lock="$(git rev-parse --absolute-git-dir)/dagu-development-pipeline.lock" || exit 0
+            if [ "$(cat "$lock" 2> /dev/null)" = "$(printenv DAG_NAME) $(printenv DAG_RUN_ID)" ]; then
+                rm -f "$lock"
+            fi
+
+steps:
+    -   id: preflight
+        run: |
+            git rev-parse --is-inside-work-tree > /dev/null
+            if [ -n "$(git status --porcelain -- . ':(exclude)specs')" ]; then
+                echo "Uncommitted changes outside specs/. Commit or stash them before the run." >&2
+                git status --short -- . ':(exclude)specs' >&2
+                exit 1
+            fi
+
+    -   id: spec
+        depends: [ preflight ]
+        action: harness.run
+        with:
+            prompt: /skill:dagu-spec ${REQUEST}
+        output_schema: &stage_schema
+            type: object
+            additionalProperties: false
+            required: [ status, folder, findings, questions, answers ]
+            properties:
+                status:
+                    type: string
+                    enum: [ done, blocked ]
+                folder:
+                    type: string
+                findings:
+                    type: integer
+                    minimum: 0
+                questions:
+                    type: string
+                answers:
+                    type: string
+        output: SPEC
+        retry_policy: &stage_retry
+            limit: 1
+            interval_sec: 5
+
+    -   id: spec_answers
+        depends: [ spec ]
+        action: human.task
+        preconditions:
+            -   condition: "${SPEC.status}"
+                expected: blocked
+        continue_on: skipped
+        with:
+            prompt: |
+                spec is blocked. Push back with answers to re-run spec. Complete ends the run.
+                ${SPEC.questions}
+            push_back:
+                rewind_to: spec
+                form: &answers_form
+                    type: object
+                    required: [ answers ]
+                    properties:
+                        answers:
+                            type: string
+                            description: Answers to the blocked questions, one per line.
+
+    -   id: plan
+        depends: [ spec_answers ]
+        action: harness.run
+        preconditions:
+            -   condition: "${SPEC.status}"
+                expected: done
+        with:
+            prompt: /skill:dagu-plan ${SPEC.folder}
+        output_schema: *stage_schema
+        output: PLAN
+        retry_policy: *stage_retry
+
+    -   id: plan_answers
+        depends: [ plan ]
+        action: human.task
+        preconditions:
+            -   condition: "${PLAN.status}"
+                expected: blocked
+        continue_on: skipped
+        with:
+            prompt: |
+                plan is blocked. Push back with answers to re-run plan. Complete ends the run.
+                ${PLAN.questions}
+            push_back:
+                rewind_to: plan
+                form: *answers_form
+
+    # Checks spec ↔ plan before tests. Repeats until a clean pass or blocked, at most 5 passes.
+    # A 5th pass that still finds findings continues to test: those findings were resolved, none stayed open.
+    -   id: plan_cross_check
+        depends: [ plan_answers ]
+        action: harness.run
+        preconditions:
+            -   condition: "${PLAN.status}"
+                expected: done
+        with:
+            prompt: /skill:dagu-cross-check ${SPEC.folder} spec-plan
+        output_schema: *stage_schema
+        output: PLAN_CROSS_CHECK
+        retry_policy: *stage_retry
+        repeat_policy:
+            repeat: until
+            condition: "${PLAN_CROSS_CHECK.status}:${PLAN_CROSS_CHECK.findings}"
+            expected: "re:^(blocked:.*|done:0)$"
+            limit: 5
+
+    -   id: plan_cross_check_answers
+        depends: [ plan_cross_check ]
+        action: human.task
+        preconditions:
+            -   condition: "${PLAN_CROSS_CHECK.status}"
+                expected: blocked
+        continue_on: skipped
+        with:
+            prompt: |
+                spec-plan cross-check is blocked with open findings. Its last pass found ${PLAN_CROSS_CHECK.findings} findings in total, fixed, dropped as intended, or open.
+                Push back with answers to the questions below. Complete ends the run.
+                ${PLAN_CROSS_CHECK.questions}
+            push_back:
+                rewind_to: plan_cross_check
+                form: *answers_form
+
+    -   id: test
+        depends: [ plan_cross_check_answers ]
+        action: harness.run
+        preconditions:
+            -   condition: "${PLAN_CROSS_CHECK.status}"
+                expected: done
+        with:
+            prompt: /skill:dagu-test ${SPEC.folder}
+        output_schema: *stage_schema
+        output: TEST
+        retry_policy: *stage_retry
+
+    -   id: test_answers
+        depends: [ test ]
+        action: human.task
+        preconditions:
+            -   condition: "${TEST.status}"
+                expected: blocked
+        continue_on: skipped
+        with:
+            prompt: |
+                test is blocked. Push back with answers to re-run test. Complete ends the run.
+                ${TEST.questions}
+            push_back:
+                rewind_to: test
+                form: *answers_form
+
+    # Repeats until a pass finds no finding or ends blocked, at most 5 passes.
+    # A 5th pass that still finds findings continues to implement: those findings were resolved, none stayed open.
+    -   id: cross_check
+        depends: [ test_answers ]
+        action: harness.run
+        preconditions:
+            -   condition: "${TEST.status}"
+                expected: done
+        with:
+            prompt: /skill:dagu-cross-check ${SPEC.folder} all
+        output_schema: *stage_schema
+        output: CROSS_CHECK
+        retry_policy: *stage_retry
+        repeat_policy:
+            repeat: until
+            condition: "${CROSS_CHECK.status}:${CROSS_CHECK.findings}"
+            expected: "re:^(blocked:.*|done:0)$"
+            limit: 5
+
+    -   id: cross_check_answers
+        depends: [ cross_check ]
+        action: human.task
+        preconditions:
+            -   condition: "${CROSS_CHECK.status}"
+                expected: blocked
+        continue_on: skipped
+        with:
+            prompt: |
+                cross-check is blocked with open findings. Its last pass found ${CROSS_CHECK.findings} findings in total, fixed, dropped as intended, or open.
+                Push back with answers to the questions below. Complete ends the run.
+                ${CROSS_CHECK.questions}
+            push_back:
+                rewind_to: cross_check
+                form: *answers_form
+
+    -   id: implement
+        depends: [ cross_check_answers ]
+        action: harness.run
+        preconditions:
+            -   condition: "${CROSS_CHECK.status}"
+                expected: done
+        with:
+            prompt: /skill:dagu-implement ${SPEC.folder}
+        output_schema: *stage_schema
+        output: IMPLEMENT
+        retry_policy: *stage_retry
+
+    -   id: implement_answers
+        depends: [ implement ]
+        action: human.task
+        preconditions:
+            -   condition: "${IMPLEMENT.status}"
+                expected: blocked
+        continue_on: skipped
+        with:
+            prompt: |
+                implement is blocked. Push back with answers to re-run implement. Complete ends the run.
+                ${IMPLEMENT.questions}
+            push_back:
+                rewind_to: implement
+                form: *answers_form
+
+    # Repeats review → address-review until a review finds no issue or the cycle ends blocked.
+    -   id: review_cycle
+        depends: [ implement_answers ]
+        action: dag.run
+        preconditions:
+            -   condition: "${IMPLEMENT.status}"
+                expected: done
+        with:
+            dag: review-cycle
+            params:
+                PROJECT_DIR: ${PROJECT_DIR}
+                FOLDER: ${SPEC.folder}
+                FEEDBACK: ${answers}
+                PREVIOUS_STDOUT: ${DAG_PUSHBACK_PREVIOUS_STDOUT_FILE}
+        output: REVIEW_CYCLE
+        repeat_policy:
+            repeat: until
+            condition: "${REVIEW_CYCLE.outputValues.status}:${REVIEW_CYCLE.outputValues.findings}"
+            expected: "re:^(blocked:.*|done:0)$"
+            limit: 5
+
+    -   id: review_answers
+        depends: [ review_cycle ]
+        action: human.task
+        preconditions:
+            -   condition: "${REVIEW_CYCLE.outputValues.status}:${REVIEW_CYCLE.outputValues.findings}"
+                expected: "re:^(blocked:.*|done:[1-9][0-9]*)$"
+        continue_on: skipped
+        with:
+            prompt: |
+                review ended with status ${REVIEW_CYCLE.outputValues.status} and ${REVIEW_CYCLE.outputValues.findings} issues in its last pass.
+                Blocked: push back with answers to the questions below.
+                Issues left after 5 cycles: push back with "continue" to run up to 5 more cycles.
+                Complete ends the run.
+                ${REVIEW_CYCLE.outputValues.questions}
+            push_back:
+                rewind_to: review_cycle
+                form: *answers_form
+
+    -   id: report
+        depends: [ review_answers ]
+        preconditions:
+            -   condition: "${REVIEW_CYCLE.outputValues.status}"
+                expected: done
+        run: |
+            ls -1 ${SPEC.folder}
+            review=$(ls ${SPEC.folder}/*-REVIEW.md 2> /dev/null || true)
+            if [ -z "$review" ]; then
+                echo "No open review issues."
+            else
+                open=$(grep -E '^### [0-9]+\. ' "$review" | grep -c -v -E ' \[(fixed|invalidated)\]$' || true)
+                if [ "$open" -gt 0 ]; then
+                    echo "$open review issues in $review remain unresolved. Resolve them, then run /skill:review ${SPEC.folder} to verify the fixes."
+                else
+                    echo "Every issue in $review is fixed or invalidated. Run /skill:review ${SPEC.folder} to verify the fixes."
+                fi
+            fi
+
+---
+name: review-cycle
+description: >
+    One review → address-review cycle. Returns the review status, issue count, and applied human answers,
+    or the address-review questions or stop reason when address-review ends blocked.
+working_dir: ${PROJECT_DIR}
+
+params:
+    -   PROJECT_DIR: ""
+    -   FOLDER: ""
+    -   FEEDBACK: ""
+    -   PREVIOUS_STDOUT: ""
+
+env:
+    # Stages run without idle gaps, so the cheaper 5-minute cache write is enough.
+    -   PI_CACHE_RETENTION: short
+
+harness:
+    provider: pi
+
+steps:
+    # FEEDBACK holds the answers of the latest push-back, which can come from an earlier stage.
+    # PREVIOUS_STDOUT is a file path only when review_answers rewound review_cycle after a run.
+    # An earlier-stage push-back resets review_cycle before its first run and leaves the unresolved literal.
+    # The section mirrors the Push-back Context that Dagu adds to harness prompts in the main workflow.
+    # review and address_review both receive it. Each applies the answers to its own questions.
+    -   id: feedback
+        run: |
+            if [ -f "$(printenv PREVIOUS_STDOUT)" ]; then
+                echo "## Push-back Context"
+                echo
+                echo "Previous stdout log: $(printenv PREVIOUS_STDOUT)"
+                echo
+                echo "Reviewer feedback:"
+                echo "- answers: $(printenv FEEDBACK)"
+            fi
+        output: FEEDBACK_SECTION
+
+    -   id: review
+        depends: [ feedback ]
+        action: harness.run
+        with:
+            prompt: |
+                /skill:dagu-review ${FOLDER}
+
+                ${FEEDBACK_SECTION}
+        output_schema: &review_schema
+            type: object
+            additionalProperties: false
+            required: [ status, folder, findings, questions, answers ]
+            properties:
+                status:
+                    type: string
+                    enum: [ done, blocked ]
+                folder:
+                    type: string
+                findings:
+                    type: integer
+                    minimum: 0
+                questions:
+                    type: string
+                answers:
+                    type: string
+        output: REVIEW
+        retry_policy: &review_retry
+            limit: 1
+            interval_sec: 5
+
+    -   id: address_review
+        depends: [ review ]
+        action: harness.run
+        preconditions:
+            -   condition: "${REVIEW.status}"
+                expected: done
+            -   condition: ls ${FOLDER}/*-REVIEW.md
+        continue_on: skipped
+        with:
+            prompt: |
+                /skill:dagu-address-review ${FOLDER}
+
+                ${FEEDBACK_SECTION}
+        output_schema: *review_schema
+        output: ADDRESS_REVIEW
+        retry_policy: *review_retry
+
+    -   id: result
+        depends: [ address_review ]
+        action: outputs.write
+        preconditions:
+            -   condition: "${ADDRESS_REVIEW.status}"
+                expected: blocked
+                negate: true
+        continue_on: skipped
+        with:
+            values:
+                status: ${REVIEW.status}
+                findings: ${REVIEW.findings}
+                questions: ${REVIEW.questions}
+                answers: ${REVIEW.answers}
+
+    # A blocked address-review ends the cycle blocked with its unresolved count and its questions or stop reason.
+    -   id: address_review_result
+        depends: [ address_review ]
+        action: outputs.write
+        preconditions:
+            -   condition: "${ADDRESS_REVIEW.status}"
+                expected: blocked
+        continue_on: skipped
+        with:
+            values:
+                status: blocked
+                findings: ${ADDRESS_REVIEW.findings}
+                questions: ${ADDRESS_REVIEW.questions}
+                answers: ${REVIEW.answers}
