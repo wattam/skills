@@ -31,3 +31,7 @@ Each category has its own `README.md` (usage) and `AGENTS.md` (authoring convent
 - **`utility/`** — standalone skills, each doing one self-contained job. See `utility/README.md`.
 
 See `AGENTS.md` for the conventions shared across every skill.
+
+## License
+
+This repository is licensed under the [MIT License](LICENSE).
