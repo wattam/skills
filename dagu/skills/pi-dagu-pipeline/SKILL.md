@@ -34,7 +34,7 @@ To launch `dagu <arguments>` detached, start it in the background so it keeps ru
    - `Succeeded`, `Failed`, or `Aborted`: go to step 8.
 7. Relay the waiting human task. Find the step marked `[waiting]` in the status output. `plan_cross_check_answers` belongs to the pre-test spec-plan cross-check; `cross_check_answers` belongs to the post-test cross-check; `review_answers` belongs to the review cycle. Read its prompt. When the prompt text is wrapped or cut, read the questions from the stdout file listed under the matching stage step.
    - `<stage>_answers` with status `blocked`: ask me each question, one at a time. Add no recommendation of your own; the stage found no evidence-backed answer.
-   - `review_answers` with status `done` and findings above 0: the review cycle reached its cycle limit. Ask me whether to run more cycles or end the run. Only the review loop pauses on its limit; both cross-check loops continue to the next stage after 5 passes.
+   - `review_answers` with status `done` and findings above 0: the review loop reached its 3-cycle limit. Ask me whether to run up to 3 more cycles or end the run. The cross-check loops continue to the next stage if they reach their limit with status `done`.
    Act on my reply:
    - Answers: write `{"answers": "<question 1>\n<my answer 1>\n..."}` to a new file under the system temporary directory. Run `dagu human-task push-back --run-id <run-id> --step <step> --inputs-json "$(cat <json file>)" development-pipeline-pi`. The shell does not expand the file content, so quotes, `$`, and backticks in my words pass unchanged.
    - More loop passes: the same steps with `{"answers": "continue"}`.

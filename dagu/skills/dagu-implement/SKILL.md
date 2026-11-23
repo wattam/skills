@@ -4,7 +4,7 @@ description: Execute an implementation plan without human interaction.
 disable-model-invocation: true
 ---
 
-Flow: `dagu-spec → dagu-plan → dagu-cross-check (spec-plan) → dagu-test → dagu-cross-check (all) → dagu-implement → dagu-review → dagu-address-review`. A workflow orchestrator runs each stage unattended in a fresh session. It repeats each `dagu-cross-check` stage until a pass finds no finding or 5 passes run, and repeats `dagu-review → dagu-address-review` until a review finds no issue.
+Flow: `dagu-spec → dagu-plan → dagu-cross-check (spec-plan) → dagu-test → dagu-cross-check (all) → dagu-implement → dagu-review → dagu-address-review`. A workflow orchestrator runs each stage unattended in a fresh session. Loops stop on a clean pass or when blocked. The orchestrator runs up to 2 `spec-plan` passes, 3 `all` passes, and 3 review cycles without human input.
 
 ## Inputs
 

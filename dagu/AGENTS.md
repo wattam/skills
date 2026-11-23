@@ -40,8 +40,8 @@ Put every `SKILL.md` in `skills/<name>/`. The install scripts install every `SKI
 
 - Every stage step validates the `## Result` JSON object `{status, folder, findings, questions, answers}` with an `output_schema`. Change the `## Result` section of every stage skill and every `output_schema` in the workflow together.
 - The final message of every stage skill is only the `## Result` JSON object: no prose, heading, or code fence before or after it. Keep that rule in the `## Result` and `## Unattended operation` sections of every stage skill.
-- The workflow runs `plan_cross_check` after plan and before test with `dagu-cross-check <folder> spec-plan`. It runs `cross_check` after test with `dagu-cross-check <folder> all`. Each loop repeats until `findings` is `0` or the stage ends `blocked`, with a limit of 5 passes. Reaching the limit with `done` and findings above `0` continues to the next stage: those findings were resolved and none stayed open. Only `blocked` pauses a cross-check loop at its human task. Keep the pre-test check independent of existing test documents and test files.
-- The workflow also repeats `dagu-review` until `findings` is `0`. Keep that meaning of `findings` in `dagu-cross-check` and `dagu-review`.
+- The workflow runs `plan_cross_check` after plan and before test with `dagu-cross-check <folder> spec-plan` for at most 2 passes. It runs `cross_check` after test with `dagu-cross-check <folder> all` for at most 3 passes. Each loop stops early when `findings` is `0` or the stage ends `blocked`. Reaching the limit with `done` and findings above `0` continues to the next stage: those findings were resolved and none stayed open. Only `blocked` pauses a cross-check loop at its human task. Keep the pre-test check independent of existing test documents and test files.
+- The review loop stops when `dagu-review` reports `0` findings or the cycle ends `blocked`, with a limit of 3 cycles before human input. If the third cycle ends `done` and its review found issues, pause at `review_answers` before any more cycles. Keep that meaning of `findings` in `dagu-cross-check` and `dagu-review`.
 
 ## Verification
 

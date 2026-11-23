@@ -4,7 +4,7 @@ description: Review code changes against a specification without human interacti
 disable-model-invocation: true
 ---
 
-Flow: `dagu-spec → dagu-plan → dagu-cross-check (spec-plan) → dagu-test → dagu-cross-check (all) → dagu-implement → dagu-review → dagu-address-review`. A workflow orchestrator runs each stage unattended in a fresh session. It repeats each `dagu-cross-check` stage until a pass finds no finding or 5 passes run, and repeats `dagu-review → dagu-address-review` until a review finds no issue.
+Flow: `dagu-spec → dagu-plan → dagu-cross-check (spec-plan) → dagu-test → dagu-cross-check (all) → dagu-implement → dagu-review → dagu-address-review`. A workflow orchestrator runs each stage unattended in a fresh session. Loops stop on a clean pass or when blocked. The orchestrator runs up to 2 `spec-plan` passes, 3 `all` passes, and 3 review cycles without human input.
 
 ## Inputs
 
@@ -156,7 +156,7 @@ The orchestrator parses the final message of the session as JSON. Make the final
 
 - `status`: `done` when the review completed; `blocked` when the run stopped on unanswered questions or a stop condition.
 - `folder`: the spec folder path relative to the current working directory.
-- `findings`: the number of issues written to the review file; `0` when no file was written. The orchestrator repeats review and address-review until a review reports `0`.
+- `findings`: the number of issues written to the review file; `0` when no file was written.
 - `questions`: one blocked question per line. Make each question self-contained: name the file, the line range, and the two classifications. Use an empty string when `done`.
 - `answers`: every human classification applied in this run, including those from the previous stdout log, and, when `blocked`, every carried answer that decides a review finding.
   Write one `<question> — <answer>` per line. Use an empty string when none applies. A later run reads them from the previous stdout log.

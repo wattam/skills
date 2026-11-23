@@ -149,8 +149,8 @@ steps:
                 rewind_to: plan
                 form: *answers_form
 
-    # Checks spec ↔ plan before tests. Repeats until a clean pass or blocked, at most 5 passes.
-    # A 5th pass that still finds findings continues to test: those findings were resolved, none stayed open.
+    # Checks spec ↔ plan before tests. Repeats until a clean pass or blocked, at most 2 passes.
+    # If the final pass ends done, continue to test even if it found and resolved findings.
     -   id: plan_cross_check
         depends: [ plan_answers ]
         action: harness.run
@@ -166,7 +166,7 @@ steps:
             repeat: until
             condition: "${PLAN_CROSS_CHECK.status}:${PLAN_CROSS_CHECK.findings}"
             expected: "re:^(blocked:.*|done:0)$"
-            limit: 5
+            limit: 2
 
     -   id: plan_cross_check_answers
         depends: [ plan_cross_check ]
@@ -211,8 +211,8 @@ steps:
                 rewind_to: test
                 form: *answers_form
 
-    # Repeats until a pass finds no finding or ends blocked, at most 5 passes.
-    # A 5th pass that still finds findings continues to implement: those findings were resolved, none stayed open.
+    # Repeats until a clean pass or blocked, at most 3 passes.
+    # If the final pass ends done, continue to implement even if it found and resolved findings.
     -   id: cross_check
         depends: [ test_answers ]
         action: harness.run
@@ -228,7 +228,7 @@ steps:
             repeat: until
             condition: "${CROSS_CHECK.status}:${CROSS_CHECK.findings}"
             expected: "re:^(blocked:.*|done:0)$"
-            limit: 5
+            limit: 3
 
     -   id: cross_check_answers
         depends: [ cross_check ]
@@ -273,7 +273,7 @@ steps:
                 rewind_to: implement
                 form: *answers_form
 
-    # Repeats review → address-review until a review finds no issue or the cycle ends blocked.
+    # Repeats review → address-review until a clean review or blocked, at most 3 cycles before human input.
     -   id: review_cycle
         depends: [ implement_answers ]
         action: dag.run
@@ -292,7 +292,7 @@ steps:
             repeat: until
             condition: "${REVIEW_CYCLE.outputValues.status}:${REVIEW_CYCLE.outputValues.findings}"
             expected: "re:^(blocked:.*|done:0)$"
-            limit: 5
+            limit: 3
 
     -   id: review_answers
         depends: [ review_cycle ]
@@ -305,7 +305,7 @@ steps:
             prompt: |
                 review ended with status ${REVIEW_CYCLE.outputValues.status} and ${REVIEW_CYCLE.outputValues.findings} issues in its last pass.
                 Blocked: push back with answers to the questions below.
-                Issues left after 5 cycles: push back with "continue" to run up to 5 more cycles.
+                Issues found on the third review: push back with "continue" to run up to 3 more cycles.
                 Complete ends the run.
                 ${REVIEW_CYCLE.outputValues.questions}
             push_back:

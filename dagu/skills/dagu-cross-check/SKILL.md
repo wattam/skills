@@ -4,7 +4,7 @@ description: Cross-check a specification, implementation plan, and test document
 disable-model-invocation: true
 ---
 
-Flow: `dagu-spec → dagu-plan → dagu-cross-check (spec-plan) → dagu-test → dagu-cross-check (all) → dagu-implement → dagu-review → dagu-address-review`. A workflow orchestrator runs each stage unattended in a fresh session. It repeats each `dagu-cross-check` stage until a pass finds no finding or 5 passes run, and repeats `dagu-review → dagu-address-review` until a review finds no issue.
+Flow: `dagu-spec → dagu-plan → dagu-cross-check (spec-plan) → dagu-test → dagu-cross-check (all) → dagu-implement → dagu-review → dagu-address-review`. A workflow orchestrator runs each stage unattended in a fresh session. Loops stop on a clean pass or when blocked. The orchestrator runs up to 2 `spec-plan` passes, 3 `all` passes, and 3 review cycles without human input.
 
 ## Inputs
 
@@ -126,7 +126,7 @@ The orchestrator parses the final message of the session as JSON. Make the final
 
 - `status`: `done` when no finding stays open; `blocked` when a finding stays open or a stop condition applies.
 - `folder`: the spec folder path relative to the current working directory.
-- `findings`: the number of findings step 4 found in this pass, whether fixed, dropped as intended, or left open. The orchestrator repeats this stage until a pass reports `0`, at most 5 passes.
+- `findings`: the number of findings step 4 found in this pass, whether fixed, dropped as intended, or left open.
 - `questions`: the open question of each open finding, one per line. Make each question self-contained: name the documents, quote the conflicting statements, and give the candidate answers. Use an empty string when `done`.
 - `answers`: always an empty string for this stage. Applied answers are recorded in the documents.
 

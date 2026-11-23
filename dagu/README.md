@@ -59,26 +59,26 @@ The retry keeps the outputs of earlier steps, takes the worktree lock again, and
 
 ```
 preflight → spec → plan
-  → plan_cross_check   (spec ↔ plan only, until 0 findings, at most 5 passes)
+  → plan_cross_check   (spec ↔ plan only, until 0 findings, at most 2 passes)
   → test
-  → cross_check        (spec ↔ plan ↔ tests, until 0 findings, at most 5 passes)
+  → cross_check        (spec ↔ plan ↔ tests, until 0 findings, at most 3 passes)
   → implement
-  → review_cycle  (review → address-review, repeats until a review finds 0 issues, up to 5 cycles)
+  → review_cycle       (review → address-review, until 0 review issues, at most 3 cycles)
   → report
 ```
 
 - Each stage runs its skill in a fresh Pi session: `/skill:dagu-spec ${REQUEST}`, then `/skill:dagu-<stage> <spec folder>`.
 - `plan_cross_check` invokes `/skill:dagu-cross-check <spec folder> spec-plan`. It ignores existing test documents and test files. `test` starts only after this loop reports `done`.
-- `cross_check` invokes `/skill:dagu-cross-check <spec folder> all` after `test`. Both cross-check loops count all findings discovered in the last pass, including those fixed or dropped as intended. Each loop runs until a fresh pass finds nothing, at most 5 passes. A 5th pass that still finds findings continues to the next stage: a `done` pass leaves no open finding.
+- `cross_check` invokes `/skill:dagu-cross-check <spec folder> all` after `test`. Both cross-check loops count all findings discovered in the last pass, including those fixed or dropped as intended. Each loop stops early on a clean or blocked pass. On reaching the limit with `done`, the workflow continues to the next stage even if the last pass found issues: a `done` pass leaves no open finding.
 - Each stage ends with the JSON line its skill's `## Result` section defines. See **Result line** in [Differences from `development-pipeline`](#differences-from-development-pipeline). The workflow checks it against a JSON schema. Output in any other form fails the step after one retry.
 - `review_cycle` is a sub-workflow named `review-cycle` in the same file. Dagu repeats single steps, and this loop needs two skills.
 - `report` lists the stage documents, states whether review issues remain unresolved, and names the skill to run next.
 
 ## Pauses
 
-Every stage has a human task, `<stage>_answers`. It opens only when the stage ends `blocked`. `review_answers` also opens when 5 review cycles still leave issues. The cross-check loops never pause on their pass limit. The pre-test cross-check uses `plan_cross_check_answers`; the post-test cross-check uses `cross_check_answers`. Review uses `review_answers`.
+Every stage has a human task, `<stage>_answers`. It opens when the stage ends `blocked`. `review_answers` also opens when the third review finds issues, even if `address-review` fixes them. The cross-check loops never pause on their pass limit. The pre-test cross-check uses `plan_cross_check_answers`; the post-test cross-check uses `cross_check_answers`. Review uses `review_answers`.
 
-- Push back: re-runs the stage with your input. Answer the questions. At `review_answers` opened by the cycle limit, write `continue` to run more review cycles. No other human task accepts `continue`.
+- Push back: re-runs the stage with your input. Answer the questions. At `review_answers` opened by the cycle limit, write `continue` to run up to 3 more review cycles. No other human task accepts `continue`.
 - Complete: ends the run. Dagu still marks that run `Succeeded`.
 
 Answer in the web UI on the run's **Human tasks** tab, or from the CLI:
