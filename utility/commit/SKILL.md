@@ -18,7 +18,7 @@ Commit a set of changes with a concise Conventional Commits message that I appro
 1. Resolve the change set.
     - No files given: read `git diff --cached`. Stop and tell me if nothing is staged.
     - Files given: read `git diff HEAD -- <paths>`. Stop and tell me if a path is untracked or has no changes.
-2. Read the repository's commit conventions: `git log` subjects, commit-lint configuration, and contribution or agent instruction files.
+2. Read the commit conventions from the repository's agent instruction files. If none exist, use the defaults from this skill.
 3. Write the message per the message rules.
 4. Show me the message and wait for approval. If I request changes, revise and show it again.
 5. Commit after approval. Check that the change set still matches step 1; if not, return to step 1. Pass the message through a quoted heredoc to `git commit -F -`. With files given, append `-- <paths>`.
@@ -28,8 +28,7 @@ Commit a set of changes with a concise Conventional Commits message that I appro
 
 - Follow the Conventional Commits specification: `<type>: <description>`.
 - Pick the type that matches the change: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `style`, `chore`, or `revert`. Mark a breaking change with `!` after the type.
-- Add a scope only when a repository rule or convention requires one.
-- Write the description in imperative mood, without a trailing period, within 72 characters. Match the repository's casing.
+- Write the description in imperative mood, without a trailing period, within 72 characters.
 - Add a body only when the subject cannot explain the change alone. The body is a blank line followed by `- ` bullet points, one short line each.
 - Add no footer and no trailers, including `Co-authored-by` and generated-by lines.
 - Be concise. State what changed and why; do not list files or restate the diff.
